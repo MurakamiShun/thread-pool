@@ -2,8 +2,6 @@
 
 #include <iostream>
 #include <chrono>
-#include <thread>
-#include <vector>
 
 int main() {
 	using namespace std;
@@ -18,9 +16,9 @@ int main() {
 	// Normal array is not good for cache line size
 	//int count[core] = { 0 };
 	auto t = chrono::system_clock::now();
-	for (int th = 0; th < core; th++) {
-		int& ccc = count[th];
-		for (int i = 0; i < 100; i++) {
+	for (int i = 0; i < 100; i++) {
+		for (int th = 0; th < core; th++) {
+			int& ccc = count[th];
 			pool[th].run([&] {
 				for (int j = 0; j < 1000000; j++)
 					ccc += 1;

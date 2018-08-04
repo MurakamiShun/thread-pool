@@ -3,8 +3,14 @@
 #include <thread>
 #include <condition_variable>
 #include <list>
-#include <malloc.h>
 #include <new>
+
+#ifdef _WIN32
+#include <malloc.h>
+#endif
+#ifdef __linux__
+#include <stdlib.h>
+#endif
 
 #ifndef _THREADPOOL_CACHE_LINE_SIZE
 #define _THREADPOOL_CACHE_LINE_SIZE 64
@@ -103,14 +109,24 @@ private:
 		d_align = align;
 		data = new T*[size];
 		for (int i = 0; i < d_size; i++) {
-			data[i] = new(_mm_malloc(sizeof(T), align)) T;
+#ifdef _WIN32
+			data[i] = new(_aligned_malloc(sizeof(T), align)) T;
+#endif
+#ifdef __linux__
+			data[i] = new(aligned_alloc(sizeof(T), align)) T;
+#endif
 		}
 	}
 	void destroy() {
 		if (data != nullptr) {
 			for (int i = 0; i < d_size; i++) {
 				data[i]->~T();
-				_mm_free(data[i]);
+#ifdef _WIN32
+				_aligned_free(data[i]);
+#endif
+#ifdef __linux__
+				free(data[i]);
+#endif
 			}
 			delete[] data;
 			data = nullptr;
