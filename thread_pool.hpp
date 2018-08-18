@@ -3,7 +3,6 @@
 #include <thread>
 #include <condition_variable>
 #include <list>
-#include <new>
 
 #ifdef _WIN32
 #include <malloc.h>
@@ -15,6 +14,7 @@
 #ifndef _THREADPOOL_CACHE_LINE_SIZE
 #define _THREADPOOL_CACHE_LINE_SIZE 64
 #endif
+
 
 
 class thread_pool {
@@ -34,8 +34,13 @@ public:
 					std::unique_lock<std::mutex> lock(mtx);
 					cv.wait(lock, [&] {return func_list.size(); });
 				}
-				func_list.front()();
-				func_list.pop_front();
+				std::function<void()> func;
+				{
+					std::unique_lock<std::mutex> lock(mtx);
+					func = std::move(func_list.front());
+					func_list.pop_front();
+				}
+				func();
 				cv.notify_all();
 			}
 		});
@@ -50,14 +55,14 @@ public:
 		
 	}
 	thread_pool(const thread_pool&) = delete;
-	void run(std::function<void()>& arg) {
+	void run(const std::function<void()>& arg) {
 		std::unique_lock<std::mutex> lock(mtx);
 		func_list.push_back(arg);
 		cv.notify_all();
 	}
-	void run(const std::function<void()> arg) {
+	void run(const std::function<void()>&& arg) {
 		std::unique_lock<std::mutex> lock(mtx);
-		func_list.push_back(arg);
+		func_list.push_back(std::move(arg));
 		cv.notify_all();
 	}
 	void wait() {
