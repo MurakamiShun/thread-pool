@@ -11,10 +11,6 @@
 #include <stdlib.h>
 #endif
 
-#ifndef _THREADPOOL_CACHE_LINE_SIZE
-#define _THREADPOOL_CACHE_LINE_SIZE 64
-#endif
-
 
 
 class thread_pool {
@@ -36,7 +32,7 @@ public:
 				}
 				std::function<void()> func;
 				{
-					std::unique_lock<std::mutex> lock(mtx);
+					std::lock_guard<std::mutex> lock(mtx);
 					func = std::move(func_list.front());
 					func_list.pop_front();
 				}
@@ -56,12 +52,12 @@ public:
 	}
 	thread_pool(const thread_pool&) = delete;
 	void run(const std::function<void()>& arg) {
-		std::unique_lock<std::mutex> lock(mtx);
+		std::lock_guard<std::mutex> lock(mtx);
 		func_list.push_back(arg);
 		cv.notify_all();
 	}
 	void run(const std::function<void()>&& arg) {
-		std::unique_lock<std::mutex> lock(mtx);
+		std::lock_guard<std::mutex> lock(mtx);
 		func_list.push_back(std::move(arg));
 		cv.notify_all();
 	}
@@ -79,24 +75,24 @@ public:
 
 
 
-template<class T>
-class aligned{
+template<class T, unsigned int align_N=64>
+class align_array{
 private:
 	int d_align;
 	int d_size;
 	T** data;
 	struct iterator {
 		int counter;
-		const int end;
+		const int size;
 		T*const * const data;
-		iterator(const int arg_end, T* const* const arg_data) noexcept :
+		iterator(const int arg_size, T* const* const arg_data) noexcept :
 			counter(0),
-			end(arg_end),
+			size(arg_size),
 			data(arg_data)
 		{
 		}
 		bool operator!=(iterator& iter) const noexcept {
-			return counter != iter.end;
+			return counter != iter.size;
 		}
 		T& operator*() {
 			return *data[counter];
@@ -138,25 +134,35 @@ private:
 		}
 	}
 public:
-	aligned(const int size, const int align=_THREADPOOL_CACHE_LINE_SIZE){
+	align_array(const int size, const int align=align_N){
 		init(size, align);
 	}
-	void resize(const int size) {
-		this->destroy();
-		this->init(size, d_align);
+	align_array(const align_array& copy) {
+		(*this) = copy;
 	}
-	aligned(aligned&& move) noexcept{
+	align_array(align_array&& move) noexcept {
 		d_size = move.d_size;
 		data = move.data;
 		move.data = nullptr;
 	}
-	aligned<T>& operator=(aligned&& move) noexcept {
+	void resize(const int size) {
+		destroy();
+		init(size, d_align);
+	}
+	align_array<T>& operator=(const align_array& copy) {
+		init(copy.d_size, copy.d_align);
+		for (int i = 0; i < d_size; i++) {
+			*data[i] = *copy.data[i];
+		}
+		return *this;
+	}
+	align_array<T>& operator=(align_array&& move) noexcept {
 		d_size = move.d_size;
 		data = move.data;
 		move.data = nullptr;
 		return *this;
 	}
-	~aligned() {
+	~align_array() {
 		destroy();
 	}
 	T& operator[](const int index) {
