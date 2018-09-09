@@ -38,7 +38,7 @@ int main() {
 			}
 		}
 		for (int th = 0; th < core; th++)
-			pool[th].join();
+			pool[th].wait();
 		cout << core << " threads:\t" << chrono::duration_cast<chrono::milliseconds>(chrono::system_clock::now() - t).count() << " ms" << endl;
 	}
 

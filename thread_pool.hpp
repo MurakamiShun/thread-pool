@@ -16,7 +16,8 @@
 class thread_pool {
 private:
 	std::thread thread;
-	std::condition_variable cv;
+	std::condition_variable cv_empty;
+	std::condition_variable cv_finish_func;
 	std::mutex mtx;
 	std::list<std::function<void()>> func_list;
 	bool joined;
@@ -28,7 +29,7 @@ public:
 			while (!joined || func_list.size()) {
 				if (func_list.size() == 0){
 					std::unique_lock<std::mutex> lock(mtx);
-					cv.wait(lock, [&] {return func_list.size(); });
+					cv_empty.wait(lock, [&] {return func_list.size(); });
 				}
 				std::function<void()> func;
 				{
@@ -37,7 +38,7 @@ public:
 					func_list.pop_front();
 				}
 				func();
-				cv.notify_all();
+				cv_finish_func.notify_all();
 			}
 		});
 	}
@@ -54,16 +55,16 @@ public:
 	void run(const std::function<void()>& arg) {
 		std::lock_guard<std::mutex> lock(mtx);
 		func_list.push_back(arg);
-		cv.notify_all();
+		cv_empty.notify_one();
 	}
 	void run(const std::function<void()>&& arg) {
 		std::lock_guard<std::mutex> lock(mtx);
 		func_list.push_back(std::move(arg));
-		cv.notify_all();
+		cv_empty.notify_one();
 	}
 	void wait() {
 		std::unique_lock<std::mutex> lock(mtx);
-		cv.wait(lock, [this] {return !func_list.size(); });
+		cv_finish_func.wait(lock, [this] {return !func_list.size(); });
 	}
 	void join() {
 		joined = true;
