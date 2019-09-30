@@ -47,6 +47,7 @@ int main() {
 
 	cout << "ratio:\t" << static_cast<double>(single) / static_cast<double>(multi) << std::endl;
 	
+
 #ifdef _WIN32
 	system("pause");
 #endif
