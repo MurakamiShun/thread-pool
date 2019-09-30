@@ -18,8 +18,7 @@
 class thread_pool {
 private:
 	std::thread thread;
-	std::condition_variable cv_empty;
-	std::condition_variable cv_finish_func;
+	std::condition_variable cv;
 	std::mutex mtx;
 	std::list<std::function<void()>> func_list;
 	std::atomic_bool joined = false;

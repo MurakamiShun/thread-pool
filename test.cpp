@@ -9,7 +9,7 @@ int main() {
 	constexpr int core = 2;
 
 	thread_pool pool[core];
-	aligned<int> count(core, 64);
+	align_array<int> count(core, 64);
 	for (auto& i : count) {
 		i = 0;
 	}
