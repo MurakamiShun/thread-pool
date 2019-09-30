@@ -4,6 +4,7 @@
 #include <condition_variable>
 #include <list>
 #include <new>
+#include <atomic>
 
 #ifdef _WIN32
 #include <malloc.h>
@@ -23,52 +24,126 @@ private:
 	std::condition_variable cv;
 	std::mutex mtx;
 	std::list<std::function<void()>> func_list;
-	bool joined;
+	std::atomic_bool joined = false;
+	std::atomic_bool is_running = false;
 public:
-	thread_pool():
-		joined(false)
-	{
+	thread_pool() {
 		thread = std::thread([this] {
 			while (!joined || func_list.size()) {
-				if (func_list.size() == 0){
+				std::function<void()> func;
+				{
 					std::unique_lock<std::mutex> lock(mtx);
-					cv.wait(lock, [&] {return func_list.size(); });
+					if (func_list.size() == 0) {
+						cv.wait(lock, [&] {return func_list.size() && is_running; });
+						continue;
+					}
+					func = std::move(func_list.front());
+					func_list.pop_front();
 				}
-				func_list.front()();
-				func_list.pop_front();
+				func();
 				cv.notify_all();
 			}
 		});
 	}
 	~thread_pool() {
-		if (!joined) {
-			joined = true;
-			if (!func_list.size())
-				run([] {});
-			thread.join();
-		}
-		
+		join();
 	}
 	thread_pool(const thread_pool&) = delete;
-	void run(std::function<void()>& arg) {
-		std::unique_lock<std::mutex> lock(mtx);
-		func_list.push_back(arg);
+	void post(std::function<void()> func) {
+		std::lock_guard<std::mutex> lock(mtx);
+		func_list.push_back(std::move(func));
 		cv.notify_all();
 	}
-	void run(const std::function<void()> arg) {
-		std::unique_lock<std::mutex> lock(mtx);
-		func_list.push_back(arg);
-		cv.notify_all();
+	void run() {
+		is_running = true;
 	}
 	void wait() {
 		std::unique_lock<std::mutex> lock(mtx);
 		cv.wait(lock, [this] {return !func_list.size(); });
+		is_running = false;
 	}
 	void join() {
-		joined = true;
-		if (!func_list.size())
-			run([] {});
-		thread.join();
+		if (!joined) {
+			joined = true;
+			is_running = true;
+			if (!func_list.size())
+				post([] {});
+			thread.join();
+			is_running = false;
+		}
+	}
+	size_t task_count() {
+		std::lock_guard<std::mutex> lock(mtx);
+		return func_list.size();
+	}
+};
+
+class thread_group {
+private:
+	std::condition_variable cv;
+	std::mutex mtx;
+	std::list<std::function<void()>> func_list;
+	const size_t thread_num;
+	std::unique_ptr<std::thread[]> threads;
+	std::atomic_bool joined = false;
+	std::atomic_bool is_running = false;
+public:
+	thread_group(const size_t thread_num):
+	thread_num(thread_num)
+	{
+		threads = std::make_unique<std::thread[]>(thread_num);
+		for (size_t i = 0; i < thread_num; i++) {
+			threads[i] = std::thread([this] {
+				while (!joined || func_list.size() > this->thread_num) {
+					std::function<void()> func;
+					{
+						std::unique_lock<std::mutex> lock(mtx);
+						if (func_list.size() == 0) {
+							cv.wait(lock, [&] {return func_list.size() && is_running; });
+						}
+						func = std::move(func_list.front());
+						func_list.pop_front();
+					}
+					func();
+					cv.notify_all();
+				}
+			});
+		}
+	}
+	~thread_group() {
+		join();
+	}
+	void post(std::function<void()> func) {
+		std::lock_guard<std::mutex> lock(mtx);
+		func_list.push_back(std::move(func));
+		cv.notify_all();
+	}
+	void run() {
+		is_running = true;
+	}
+	void wait() {
+		std::unique_lock<std::mutex> lock(mtx);
+		cv.wait(lock, [this] {return !func_list.size(); });
+		is_running = false;
+	}
+	void join() {
+		if (!joined) {
+			joined = true;
+			is_running = true;
+			if (func_list.size() < thread_num) {
+				for (size_t i = 0; i < thread_num; i++) {
+					post([] {});
+				}
+			}
+			for (size_t i = 0; i < thread_num; i++) {
+				threads[i].join();
+			}
+			is_running = false;
+		}
+	}
+	size_t task_count() {
+		std::lock_guard<std::mutex> lock(mtx);
+		return func_list.size();
 	}
 };
 
