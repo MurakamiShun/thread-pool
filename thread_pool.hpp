@@ -3,11 +3,8 @@
 #include <thread>
 #include <condition_variable>
 #include <list>
-<<<<<<< HEAD
 #include <new>
 #include <atomic>
-=======
->>>>>>> aa3f52b65109744491ff454326dee8586603bc41
 
 #ifdef _WIN32
 #include <malloc.h>
