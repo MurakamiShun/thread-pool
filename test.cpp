@@ -14,7 +14,7 @@ int main() {
 	aligned_array<int> sum(core);
 	for (int i = 0; i < 100; i++) {
 		for (int th = 0; th < core; th++) {
-			group.post(th, [&sum, th] {
+			group.post([&sum, th] {
 				int tmp = 0;
 				for (int j = 0; j < 1000000; j++)
 					sum[th] += 1;
@@ -22,7 +22,7 @@ int main() {
 			});
 		}
 	}
-	group.wait();
+	group.wait_all();
 	auto multi = (chrono::system_clock::now() - t).count();
 	cout << core << " thread group:\t" << multi << " ns" << endl;
 

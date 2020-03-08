@@ -5,6 +5,8 @@
 #include <queue>
 #include <new>
 #include <atomic>
+#include <optional>
+#include <future>
 
 #ifdef _WIN32
 #include <malloc.h>
@@ -13,77 +15,158 @@
 #include <stdlib.h>
 #endif
 
-
-
 class thread_pool {
 private:
+	using Proc = std::function<void()>;
 	std::thread thread;
-	std::condition_variable cv;
+	std::condition_variable enqueque_cv;
 	std::mutex mtx;
-	std::queue<std::function<void()>> tasks;
+	std::queue<Proc> tasks;
 	std::atomic_bool stop = false;
+	std::condition_variable task_empty_cv;
 public:
+	std::optional<std::function<std::optional<Proc>()>> task_fetcher;
+
 	thread_pool() {
 		thread = std::thread([this] {
 			while (true) {
-				std::function<void()> func;
-				{
-					std::unique_lock<std::mutex> lock(mtx);
-					if (!stop && tasks.empty()) {
-						cv.notify_all();
-						cv.wait(lock);
+				if (task_fetcher) {
+					auto func = (*task_fetcher)();
+					if (!stop && !func) {
+						task_empty_cv.notify_all();
+						std::unique_lock lock(mtx);
+						enqueque_cv.wait(lock);
 					}
 					if (stop) return;
-					func = std::move(tasks.front());
-					tasks.pop();
+					if (!func) continue;
+					(*func)();
 				}
-				func();
+				else {
+					Proc func;
+					{
+						std::unique_lock lock(mtx);
+						if (!stop && tasks.empty()) {
+							task_empty_cv.notify_all();
+							enqueque_cv.wait(lock);
+						}
+						if (stop) return;
+						if (tasks.empty()) continue;
+						func = std::move(tasks.front());
+						tasks.pop();
+					}
+					func();
+				}
 			}
 		});
 	}
 	~thread_pool() {
 		stop = true;
-		cv.notify_all();
+		enqueque_cv.notify_all();
 		thread.join();
 	}
 	thread_pool(const thread_pool&) = delete;
-	void post(std::function<void()> func) {
-		std::lock_guard<std::mutex> lock(mtx);
-		tasks.push(std::move(func));
-		cv.notify_all();
+
+	template<typename F, typename... Args>
+	auto post(F&& f, Args&&... args) {
+		if constexpr (std::is_same_v<void, std::invoke_result_t<F, Args...>>) {
+			std::lock_guard lock(mtx);
+			tasks.push([f,args...] { f(args...); });
+			enqueque_cv.notify_all();
+			return;
+		}
+		else {
+			auto task = std::make_shared<std::packaged_task<std::invoke_result_t<F, Args...>(Args...)>>(std::bind(std::forward<F>(f), std::forward<Args>(args)...));
+			auto ret = task->get_future();
+
+			std::lock_guard lock(mtx);
+			tasks.push([task] { (*task)(); });
+			enqueque_cv.notify_all();
+
+			return ret;
+		}
 	}
+
+	void run_fetcher() {
+		enqueque_cv.notify_all();
+	}
+
 	void wait() {
-		std::unique_lock<std::mutex> lock(mtx);
-		cv.wait(lock, [this] { return !tasks.size(); });
+		std::unique_lock lock(mtx);
+		task_empty_cv.wait(lock, [this] { return tasks.empty(); });
 	}
 	size_t task_count() {
-		std::lock_guard<std::mutex> lock(mtx);
+		std::lock_guard lock(mtx);
 		return tasks.size();
 	}
 };
 
 class thread_group {
 private:
-	std::unique_ptr<thread_pool[]> thread_pools;
-	size_t thread_count;
+	using Proc = std::function<void()>;
+	std::mutex mtx;
+	std::queue<Proc> tasks;
+	std::condition_variable task_cv;
+
 public:
-	thread_group(const size_t thread_num) {
-		thread_pools = std::make_unique<thread_pool[]>(thread_num);
-		thread_count = thread_num;
+	std::unique_ptr<thread_pool[]> threads;
+	const size_t thread_count;
+
+	thread_group(const size_t thread_num = std::thread::hardware_concurrency()) : thread_count(thread_num){
+		threads = std::make_unique<thread_pool[]>(thread_num);
+		for (size_t i = 0; i < thread_num; ++i) {
+			threads[i].task_fetcher = [this]()->std::optional<Proc> {
+				Proc func;
+				{
+					std::lock_guard lock(mtx);
+					if (tasks.empty()) return std::nullopt;
+					func = std::move(tasks.front());
+					tasks.pop();
+				}
+				task_cv.notify_all();
+				return std::move(func);
+			};
+		}
 	}
-	void post(size_t th, std::function<void()> func) {
-		thread_pools[th].post(std::move(func));
+
+	template<typename F, typename... Args>
+	auto post(F&& f, Args&&... args) {
+		if constexpr (std::is_same_v<void, std::invoke_result_t<F, Args...>>) {
+			std::lock_guard lock(mtx);
+			tasks.push([f, args...]{ f(args...); });
+			run();
+			return;
+		}
+		else {
+			auto task = std::make_shared<std::packaged_task<std::invoke_result_t<F, Args...>(Args...)>>(std::bind(std::forward<F>(f), std::forward<Args>(args)...));
+			auto ret = task->get_future();
+
+			std::lock_guard lock(mtx);
+			tasks.push([task] { (*task)(); });
+			run();
+
+			return ret;
+		}
 	}
-	void wait() {
+	void run() {
 		for (size_t i = 0; i < thread_count; ++i)
-			thread_pools[i].wait();
+			threads[i].run_fetcher();
+	}
+
+	void wait_all() {
+		std::unique_lock lock(mtx);
+		task_cv.wait(lock, [this] { return tasks.empty(); });
+
+		for (size_t i = 0; i < thread_count; ++i)
+			threads[i].wait();
 	}
 	size_t task_count() {
-		size_t sum = 0;
-		for (size_t i = 0; i < thread_count; ++i)
-			sum += thread_pools[i].task_count();
+		std::lock_guard lock(mtx);
+		return tasks.size();
 	}
+
 };
+
+
 
 
 template<typename T>
