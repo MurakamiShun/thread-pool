@@ -22,7 +22,8 @@ private:
 	std::condition_variable enqueque_cv;
 	std::mutex mtx;
 	std::queue<Proc> tasks;
-	std::atomic_bool stop = false;
+	std::atomic_bool stop = true;
+	std::atomic_bool join = false;
 	std::condition_variable task_empty_cv;
 public:
 	std::optional<std::function<std::optional<Proc>()>> task_fetcher;
@@ -32,24 +33,28 @@ public:
 			while (true) {
 				if (task_fetcher) {
 					auto func = (*task_fetcher)();
-					if (!stop && !func) {
+					if (!join && !func) {
+						stop = true;
 						task_empty_cv.notify_all();
 						std::unique_lock lock(mtx);
 						enqueque_cv.wait(lock);
+						stop = false;
+						continue;
 					}
-					if (stop) return;
-					if (!func) continue;
+					if (join) return;
 					(*func)();
 				}
 				else {
 					Proc func;
 					{
 						std::unique_lock lock(mtx);
-						if (!stop && tasks.empty()) {
+						if (!join && tasks.empty()) {
+							stop = true;
 							task_empty_cv.notify_all();
-							enqueque_cv.wait(lock);
+							enqueque_cv.wait(lock, [this] { return tasks.empty(); });
+							stop = false;
 						}
-						if (stop) return;
+						if (join) return;
 						if (tasks.empty()) continue;
 						func = std::move(tasks.front());
 						tasks.pop();
@@ -60,7 +65,7 @@ public:
 		});
 	}
 	~thread_pool() {
-		stop = true;
+		join = true;
 		enqueque_cv.notify_all();
 		thread.join();
 	}
@@ -68,6 +73,7 @@ public:
 
 	template<typename F, typename... Args>
 	auto post(F&& f, Args&&... args) {
+		stop = false;
 		if constexpr (std::is_same_v<void, std::invoke_result_t<F, Args...>>) {
 			std::lock_guard lock(mtx);
 			tasks.push([f,args...] { f(args...); });
@@ -91,6 +97,7 @@ public:
 	}
 
 	void wait() {
+		if (stop) return;
 		std::unique_lock lock(mtx);
 		task_empty_cv.wait(lock, [this] { return tasks.empty(); });
 	}

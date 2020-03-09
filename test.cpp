@@ -6,18 +6,21 @@
 int main() {
 	using namespace std;
 
-	constexpr int core = 8;
+	int core = 8;
+	std::cout << "core:";
+	std::cin >> core;
 
 	// thread group
 	thread_group group(core);
 	auto t = chrono::system_clock::now();
-	aligned_array<int> sum(core);
+	aligned_array<atomic_int> sum(core);
+	for (auto& i : sum) i = 0;
 	for (int i = 0; i < 100; i++) {
 		for (int th = 0; th < core; th++) {
 			group.post([&sum, th] {
-				int tmp = 0;
+				volatile int tmp = 0;
 				for (int j = 0; j < 1000000; j++)
-					sum[th] += 1;
+					tmp += 1;
 				sum[th] += tmp;
 			});
 		}
